@@ -15,6 +15,7 @@ from PIL import Image
 # -- Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 JIGSAWS_ROOT = PROJECT_ROOT / 'jigsaws'
+OUTPUT_ROOT = PROJECT_ROOT / 'output'
 
 
 def get_jigsaws():
@@ -25,7 +26,7 @@ def get_jigsaws():
             jigsaw_piece_image = Image.open(jigsaw_piece_path)
 
             jigsaw_piece = JigsawPiece(
-                name=jigsaw_piece_path.name,
+                name=jigsaw_piece_path.stem,
                 image=jigsaw_piece_image
             )
             trivial_jigsaw = Jigsaw(pieces=[jigsaw_piece])
@@ -71,6 +72,35 @@ class Jigsaw:
         return '-'.join([piece.name for piece in self.pieces])
 
     @property
+    def image(self):
+        image = Image.new('RGB', (self.width, self.height))
+        for piece in self.pieces:
+            shifted_image_pos_x = int((piece.pos[0] - self.top_left_pos[0]) * piece.width)
+            shifted_image_pos_y = int((piece.pos[1] - self.top_left_pos[1]) * piece.height)
+            image.paste(piece.image, (shifted_image_pos_x, shifted_image_pos_y))
+        return image
+
+    @property
+    def width(self):
+        min_pos_x = min([piece.pos[0] for piece in self.pieces])
+        max_pos_x = max([piece.pos[0] for piece in self.pieces])
+        # Assuming pieces are regular
+        return int((max_pos_x - min_pos_x + 1) * self.pieces[0].width)
+
+    @property
+    def height(self):
+        min_pos_y = min([piece.pos[1] for piece in self.pieces])
+        max_pos_y = max([piece.pos[1] for piece in self.pieces])
+        # Assuming pieces are regular
+        return int((max_pos_y - min_pos_y + 1) * self.pieces[0].height)
+
+    @property
+    def top_left_pos(self):
+        min_pos_x = min([piece.pos[0] for piece in self.pieces])
+        min_pos_y = min([piece.pos[1] for piece in self.pieces])
+        return array([min_pos_x, min_pos_y])
+
+    @property
     def internal_boundaries(self):
         internal_boundaries = []
         for piece in self.pieces:
@@ -88,10 +118,7 @@ class Jigsaw:
                     external_boundaries.append(boundary)
         return external_boundaries
 
-    def join_new_piece(self, new_piece):
-        pass
-
-    def find_all_valid_connections(self, other):
+    def find_all_connections(self, other):
         valid_connections = []
         for boundary in self.external_boundaries:
             for other_boundary in other.external_boundaries:
@@ -186,40 +213,53 @@ class JigsawPiece:
 
 
 if __name__ == '__main__':
+    for output_image in OUTPUT_ROOT.glob('*'):
+        output_image.unlink()
+
     jigsaw_dict = get_jigsaws()
-    jigsaws = jigsaw_dict['dragon_16']
+    jigsaws = jigsaw_dict['dragon_64']
+
+    global_connection_reports = {}
 
     while len(jigsaws) > 1:
-        global_valid_connection_groups = []
-        global_scores = []
-
         for jigsaw_1, jigsaw_2 in combinations(jigsaws, 2):
-            print(jigsaw_1.name, jigsaw_2.name, len(jigsaw_1.find_all_valid_connections(jigsaw_2)))
-            valid_connection_groups = jigsaw_1.find_all_valid_connections(jigsaw_2)
-            for valid_connection_group in valid_connection_groups:
-                global_valid_connection_groups.append((jigsaw_1, jigsaw_2, valid_connection_group))
-                global_scores.append(sum(
-                    [boundary_pair[0].compare_difference_with(boundary_pair[1]) for boundary_pair in
-                     valid_connection_group]) / len(valid_connection_group))
+            report_key = (jigsaw_1.name, jigsaw_2.name)
 
-        print(global_valid_connection_groups)
-        print(global_scores)
-        index = global_scores.index(min(global_scores))
-        print(index)
+            if report_key in global_connection_reports:
+                continue
 
-        jigsaw_1, jigsaw_2, valid_connection_group = global_valid_connection_groups[index]
-        jigsaw_1.merge_with(jigsaw_2, valid_connection_group[0][0].pos, valid_connection_group[0][1].pos)
+            connection_reports = []
+            for connection_group in jigsaw_1.find_all_connections(jigsaw_2):
+                scores = [
+                    boundary_pair[0].compare_difference_with(boundary_pair[1]) for boundary_pair in connection_group
+                ]
+
+                connection_report = {
+                    'group': connection_group,
+                    'score': sum(scores) / len(scores)
+                }
+                connection_reports.append(connection_report)
+
+            # Determine best connection report to publish for these two jigsaws:
+            global_connection_reports[report_key] = min(connection_reports, key=lambda item: item['score'])
+
+        # Determine best connection report amongst all jigsaws:
+        best_report_key = min(global_connection_reports, key=lambda key: global_connection_reports[key]['score'])
+
+        jigsaw_1 = next(filter(lambda item: item.name == best_report_key[0], jigsaws))
+        jigsaw_2 = next(filter(lambda item: item.name == best_report_key[1], jigsaws))
+        connection_group = global_connection_reports[best_report_key]['group']
+
+        # Remove reports of the jigsaws that will be merged:
+        merged_keys = [
+            report_key for report_key in global_connection_reports
+            if report_key[0] == jigsaw_1.name or report_key[1] == jigsaw_1.name
+            or report_key[0] == jigsaw_2.name or report_key[1] == jigsaw_2.name
+        ]
+        for merged_key in merged_keys:
+            del global_connection_reports[merged_key]
+
+        jigsaw_1.merge_with(jigsaw_2, connection_group[0][0].pos, connection_group[0][1].pos)
+        jigsaw_1.image.save(OUTPUT_ROOT / f'{hash(jigsaw_1.name)}.png')
         jigsaws.remove(jigsaw_2)
-        pass
-
-    print('!')
-
-    #         for name_1, boundary_1 in jigsaw_piece_1._boundaries.items():
-    #             for name_2, boundary_2 in jigsaw_piece_2._boundaries.items():
-    #                 error = compare_boundaries(boundary_1, boundary_2)
-    #                 if error != -1:
-    #                     report = jigsaw_piece_1.name, name_1, jigsaw_piece_2.name, name_2, error
-    #                     reports.append(report)
-    #
-    # reports.sort(key=lambda e: e[-1])
-    # print(*reports, sep='\n')
+        print('!')
