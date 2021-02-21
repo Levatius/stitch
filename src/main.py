@@ -217,7 +217,7 @@ if __name__ == '__main__':
         output_image.unlink()
 
     jigsaw_dict = get_jigsaws()
-    jigsaws = jigsaw_dict['dragon_64']
+    jigsaws = jigsaw_dict['test_card_3x2']
 
     global_connection_reports = {}
 
